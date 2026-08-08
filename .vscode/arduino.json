@@ -1,0 +1,8 @@
+{
+    "board": "arduino:avr:uno",
+    "configuration": "cpu=atmega328p",
+    "port": "COM7",
+    "sketch": "probe/probe.ino",
+    "output": "../build",
+    "intelliSenseGen": "global"
+}

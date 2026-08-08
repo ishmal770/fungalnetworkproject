@@ -1,3 +1,5 @@
+#include <Arduino.h>
+
 const int sensorPin = A0;
 
 void setup() {
@@ -6,6 +8,10 @@ void setup() {
 
 void loop() {
     int reading = analogRead(sensorPin);
+
+    Serial.print("Raw: ");
     Serial.println(reading);
+
     delay(500);
 }
+   
