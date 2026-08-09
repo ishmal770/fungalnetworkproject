@@ -1,0 +1,6 @@
+{
+    "arduino.useArduinoCli": true,
+    "arduino.path": "C:\\Program Files\\Arduino CLI",
+    "arduino.commandPath": "arduino-cli.exe",
+    "C_Cpp.default.configurationName": "Arduino"
+}
