@@ -8,6 +8,7 @@ import serial
 import csv
 import re
 import json
+import time
 from datetime import datetime
 
 st.set_page_config(page_title="EcoScout", layout="wide")
@@ -29,8 +30,8 @@ def load_calibration():
 
 
 def parse_raw_line(line):
-    # matches the Arduino's "Raw: 123" format
-    match = re.search(r"Raw:\s*(\d+)", line)
+    # matches the Arduino's "Raw: 123" format (case-insensitive — sketches vary)
+    match = re.search(r"raw:\s*(\d+)", line, re.IGNORECASE)
     if match:
         return int(match.group(1))
     if line.strip().isdigit():
@@ -54,6 +55,7 @@ def sample_soil(serial_port, site_label, n=SAMPLE_READINGS_N, status_ph=None):
     """
     readings = []
     ser = serial.Serial(serial_port, 9600, timeout=1)
+    time.sleep(1.5)  # Arduino resets when the port opens — give it a moment to reboot
     file_exists = os.path.exists(SITE_SAMPLE_LOG)
     f = open(SITE_SAMPLE_LOG, "a", newline="")
     writer = csv.DictWriter(f, fieldnames=["timestamp", "site", "raw"])
@@ -180,6 +182,9 @@ st.write(f"Scanning in {total_boxes} boxes ({cols} across, {rows} down).")
 
 os.makedirs("scan_images", exist_ok=True)
 
+if "box_coords" not in st.session_state:
+    st.session_state.box_coords = {}  # {(row, col): (lat, lon)} — real GPS per photo, when provided
+
 current = st.session_state.current_box
 if current < total_boxes:
     row, col = current // cols, current % cols
@@ -187,11 +192,22 @@ if current < total_boxes:
     st.pyplot(draw_capture_grid(rows, cols, row, col, captured_set))
     st.subheader(f"Box {current + 1} of {total_boxes} — (row {row+1}, col {col+1})")
     st.info("Stand directly over this grid square, hold the camera straight down, take the photo.")
+
+    with_gps = st.checkbox("I have the GPS coordinates for this exact spot (from Maps)", key=f"has_gps_{current}")
+    if with_gps:
+        gps_col1, gps_col2 = st.columns(2)
+        with gps_col1:
+            box_lat = st.number_input("Latitude", value=37.4275, format="%.6f", key=f"lat_{current}")
+        with gps_col2:
+            box_lon = st.number_input("Longitude", value=-122.1697, format="%.6f", key=f"lon_{current}")
+
     uploaded = st.file_uploader(f"Upload photo for box {current+1}", key=f"upload_{current}")
     if uploaded is not None:
         save_path = f"scan_images/box_{row}_{col}.jpg"
         with open(save_path, "wb") as f:
             f.write(uploaded.getbuffer())
+        if with_gps:
+            st.session_state.box_coords[(row, col)] = (box_lat, box_lon)
         st.image(save_path, caption=f"Saved: box ({row},{col})", width=200)
         st.success(f"Saved box ({row},{col}).")
         st.session_state.current_box += 1
@@ -288,13 +304,19 @@ def build_pixel_heatmap(rows, cols, tile_px=150):
                 canvas[r*tile_px:(r+1)*tile_px, c*tile_px:(c+1)*tile_px] = vari
 
     fig, ax = plt.subplots()
-    ax.imshow(canvas, cmap="RdYlGn", vmin=-0.3, vmax=0.3)
+    im = ax.imshow(canvas, cmap="RdYlGn", vmin=-0.3, vmax=0.3)
     ax.axis("off")
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("VARI (greenness index)")
+    cbar.set_ticks([-0.3, 0, 0.3])
+    cbar.set_ticklabels(["Stressed/bare", "Neutral", "Healthy/green"])
+    fig.tight_layout()
     return fig
 
 
 def build_heatmap(grid_results, rows, cols):
     import matplotlib.image as mpimg
+    from matplotlib.patches import Patch
     fig, ax = plt.subplots()
     cmap = plt.cm.RdYlGn_r
     for r in range(rows):
@@ -321,6 +343,19 @@ def build_heatmap(grid_results, rows, cols):
     ax.set_ylim(0, rows)
     ax.set_aspect("equal")
     ax.axis("off")
+
+    # legend: colorbar for the continuous risk gradient, plus a swatch for the
+    # one thing a colorbar can't show — "abstained" is a separate category, not
+    # a point on the risk scale
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Fungal risk (CNN)")
+    cbar.set_ticks([0, 0.5, 1])
+    cbar.set_ticklabels(["Low", "Medium", "High"])
+    abstain_patch = Patch(facecolor=(0.6, 0.6, 0.6, 1.0), edgecolor="black", label="Abstained (unclear/sky)")
+    ax.legend(handles=[abstain_patch], loc="upper center", bbox_to_anchor=(0.5, -0.05), frameon=False)
+    fig.tight_layout()
     return fig
 
 if st.button("Run inference on captured boxes"):
@@ -442,7 +477,51 @@ st.write("Whenever the CNN flags a red (high-risk) tile, you'll be prompted here
 
 RISK_THRESHOLD = 0.6  # tiles scoring above this get flagged red / sampling candidates
 
-serial_port = st.text_input("Arduino serial port", value="/dev/tty.usbmodem1101")
+try:
+    from serial.tools import list_ports
+    available_ports = [p.device for p in list_ports.comports()]
+    # On macOS, prefer /dev/cu.* over /dev/tty.* for the same physical device.
+    # tty.* waits for a carrier-detect signal and can hang or silently drop
+    # data in a way cu.* doesn't — the classic "works in the Serial Monitor
+    # but not here" symptom on Mac. Sort cu.* first so it's the default pick.
+    available_ports.sort(key=lambda p: (0 if "/cu." in p else 1, p))
+except Exception:
+    available_ports = []
+
+if available_ports:
+    serial_port = st.selectbox("Arduino serial port", available_ports)
+else:
+    st.warning("No serial ports detected — is the Arduino plugged in? Falling back to manual entry.")
+    serial_port = st.text_input("Arduino serial port", value="/dev/cu.usbmodem1101")
+
+st.caption("⚠️ Only one program can read a serial port at a time. Close the Arduino IDE's Serial Monitor, "
+           "VS Code's serial extension, and any running `log_moisture.py` session before sampling here — "
+           "otherwise this app can silently get zero readings while the other program keeps working fine.")
+
+with st.expander("🔧 Debug: show raw serial output (use this if samples come back with 0 readings)"):
+    if st.button("Read raw lines for 5 seconds"):
+        try:
+            ser = serial.Serial(serial_port, 9600, timeout=1)
+            time.sleep(1.5)
+            lines = []
+            start = time.time()
+            while time.time() - start < 5:
+                line = ser.readline().decode("utf-8", errors="replace").strip()
+                if line:
+                    lines.append(line)
+            ser.close()
+            if not lines:
+                st.error("Nothing received in 5 seconds — check the port, that nothing else has it open, "
+                          "and that the sketch is actually looping and printing.")
+            else:
+                st.code("\n".join(lines))
+                if not any(parse_raw_line(l) is not None for l in lines):
+                    st.warning("Got data, but none of it matched the expected 'Raw: <number>' format — "
+                               "compare the lines above to what parse_raw_line() is looking for.")
+                else:
+                    st.success("At least one line parsed successfully — sampling should work now.")
+        except Exception as e:
+            st.error(f"Couldn't open port: {e}")
 
 cal_preview = load_calibration()
 if cal_preview:
@@ -484,7 +563,7 @@ if "grid_results" in st.session_state:
 
         labeled = [(r, c, i) for i, ((r, c), res) in enumerate(high_risk, start=1)]
         st.pyplot(build_sampling_sites_map(g_rows, g_cols, labeled))
-        st.caption("Red-numbered boxes mark exactly which physical grid square to go test.")
+        st.caption("🔴 Red-numbered boxes = high-risk sites flagged by the CNN — go test these with the probe.")
 
         for i, ((r, c), res) in enumerate(high_risk, start=1):
             site_key = (r, c)
@@ -493,7 +572,12 @@ if "grid_results" in st.session_state:
                                                                "conductivity_score": None, "level": None}
             site = st.session_state.sampling_sites[site_key]
 
-            lat, lon = get_box_coordinates(plot_lat, plot_lon, r, c, g_rows, g_cols, plot_width_ft, plot_height_ft)
+            if (r, c) in st.session_state.box_coords:
+                lat, lon = st.session_state.box_coords[(r, c)]
+                coord_source = "GPS entered at capture"
+            else:
+                lat, lon = get_box_coordinates(plot_lat, plot_lon, r, c, g_rows, g_cols, plot_width_ft, plot_height_ft)
+                coord_source = "estimated from plot center"
             priority = "High priority" if res["mean"] >= 0.8 else "Medium priority"
 
             with st.container(border=True):
@@ -502,7 +586,7 @@ if "grid_results" in st.session_state:
                 else:
                     st.markdown(f"### ✅ Site #{i} — tested")
                 st.write(f"CNN risk: {res['mean']*100:.0f}% ± {res.get('std', 0)*100:.0f}%  "
-                         f"(class: {res.get('class', 'n/a')})  |  Coordinates: {lat:.4f}, {lon:.4f}")
+                         f"(class: {res.get('class', 'n/a')})  |  Coordinates: {lat:.4f}, {lon:.4f} ({coord_source})")
                 st.write(f"Sensor status: {site['sensor_status']}  |  Recommendation: {priority}")
 
                 if st.button(f"Take Sample — Site #{i}", key=f"sample_btn_{r}_{c}"):
