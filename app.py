@@ -14,9 +14,7 @@ from datetime import datetime
 st.set_page_config(page_title="EcoScout", layout="wide")
 st.title("EcoScout — Fungal Activity Screening")
 
-# ============================================================
-# 0. CONDUCTIVITY CALIBRATION + SAMPLING (Saira's — used only from section 4)
-# ============================================================
+
 CALIBRATION_FILE = "calibration.json"
 SITE_SAMPLE_LOG = "site_samples_log.csv"
 SAMPLE_READINGS_N = 5  # sample = average of this many quick readings
@@ -122,9 +120,7 @@ def run_sample_and_report(serial_port, site_label):
     return avg_raw, score, level
 
 
-# ============================================================
-# 1. PLOT SETUP + GRID-GUIDED IMAGE CAPTURE
-# ============================================================
+
 def draw_capture_grid(rows, cols, current_row, current_col, captured_set):
     fig, ax = plt.subplots(figsize=(min(cols, 8), min(rows, 8)))
     for r in range(rows):
@@ -215,9 +211,7 @@ if current < total_boxes:
 else:
     st.success("All grid boxes photographed.")
 
-# ============================================================
-# 2. INFERENCE + HEATMAP + SKY GUARD
-# ============================================================
+
 st.header("2. Fungal Activity Heatmap")
 
 def looks_like_sky(image_path, brightness_thresh=200, sat_thresh=40, edge_thresh=8):
@@ -386,9 +380,7 @@ if st.button("Run inference on captured boxes"):
             st.pyplot(build_pixel_heatmap(rows, cols))
             st.caption("After: continuous per-pixel likelihood gradient (VARI-based, same style as the satellite NDVI map)")
 
-# ============================================================
-# 3. SATELLITE CONTEXT PANEL (plot-level, not per-tile)
-# ============================================================
+
 st.header("3. Environmental Context (Satellite)")
 try:
     from satellite import init_ee, get_satellite_features, get_ndvi_map_url, get_truecolor_map_url, build_region
@@ -444,9 +436,7 @@ else:
     with sat_col2:
         plot_lon = st.number_input("Longitude", value=-122.1697, format="%.6f")
 
-# ============================================================
-# 4. RED-ZONE ALERT + SAMPLING PROMPT — CNN flags risk, Arduino verifies on demand
-# ============================================================
+
 def build_sampling_sites_map(rows, cols, labeled_sites):
     import matplotlib.image as mpimg
     fig, ax = plt.subplots()
@@ -480,10 +470,7 @@ RISK_THRESHOLD = 0.6  # tiles scoring above this get flagged red / sampling cand
 try:
     from serial.tools import list_ports
     available_ports = [p.device for p in list_ports.comports()]
-    # On macOS, prefer /dev/cu.* over /dev/tty.* for the same physical device.
-    # tty.* waits for a carrier-detect signal and can hang or silently drop
-    # data in a way cu.* doesn't — the classic "works in the Serial Monitor
-    # but not here" symptom on Mac. Sort cu.* first so it's the default pick.
+    
     available_ports.sort(key=lambda p: (0 if "/cu." in p else 1, p))
 except Exception:
     available_ports = []

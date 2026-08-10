@@ -7,10 +7,7 @@ from PIL import Image #used only to confirm a downloaded file actually decodes
 
 INAT_URL = "https://api.inaturalist.org/v1/observations"
 COMMONS_URL = "https://commons.wikimedia.org/w/api.php"
-# Wikimedia's User-Agent policy requires a descriptive agent with a contact route;
-# a generic string gets the image CDN to answer 429 for every request, which then
-# surfaces confusingly as "cannot identify image file" once the HTML error page is
-# written to disk with a .jpg name.
+
 USER_AGENT = {"User-Agent": "EcoScout/1.0 (student science project; "
                             "https://github.com/ishmal770/fungalnetworkproject)"}
 FUNGI_TAXON = 47170    # Fungi
@@ -56,18 +53,11 @@ def fetch_inat_fungi(n=400):
 
 
 def fetch_inat_nonfungi(n=400):
-    # outdoor iNaturalist photos that are NOT fungi (general plants/landscapes),
-    # labeled "none" — this is critical: without it, "none" is only studio-style leaf
-    # close-ups, so the model learns to recognize PHOTO STYLE instead of actual content
+    
     return _fetch_inat(PLANTAE_TAXON, "none", n)
 
 
-# Every image in the fungi/plant/leaf sources has an organism deliberately centred
-# in frame. A 5-ft plot square usually contains no organism at all — it is dirt,
-# gravel, turf, mulch, rock, or (if the camera tilts) sky. With no class for that,
-# softmax has to force those photos into one of the organism classes, and the
-# nearest match is fungal_fruiting_body, because every fungus photo in the set has
-# an earthy outdoor background. These queries supply the missing negative.
+
 BACKGROUND_QUERIES = [
     "soil texture ground", "bare earth field ground", "dry cracked mud",
     "sky clouds", "overcast sky", "blue sky",
@@ -78,11 +68,7 @@ BACKGROUND_QUERIES = [
     "ploughed field soil", "meadow grass ground", "footpath dirt track",
 ]
 
-# Commons search relevance is loose, so a query for ground texture happily returns
-# a portrait or a cathedral. These are the words that mean "the subject is an
-# organism, not the ground" — a hit on one is not a background image. Fungus terms
-# especially: a mushroom photo mislabelled `background` teaches the exact opposite
-# of what this class is for.
+
 _NOT_BACKGROUND = (
     "fungus", "fungi", "mushroom", "toadstool", "agaric", "bolet", "amanita",
     "polypore", "mycena", "russula", "lichen", "mycel",
@@ -279,12 +265,11 @@ if __name__ == "__main__":
     OUT_DIR = "datasets"
     IMG_DIR = os.path.join(OUT_DIR, "images")
 
-    # 1. iNaturalist — fungi (positive) AND non-fungi outdoor photos (negative, breaks the style shortcut)
+    
     inat_records = download_url_images(fetch_inat_fungi(400), IMG_DIR, "inat")
     inat_nonfungi_records = download_url_images(fetch_inat_nonfungi(400), IMG_DIR, "inat_none")
 
-    # 1b. Ground/sky imagery — the "there is nothing here" class the plot camera
-    # spends most of its time looking at
+    
     bg_records = download_url_images(fetch_commons_backgrounds(), IMG_DIR, "bg")
 
     # 2. PlantVillage subset — folder names as they appear on disk (root/<split>/<class>)

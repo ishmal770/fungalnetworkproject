@@ -53,16 +53,14 @@ def get_satellite_features(lat, lon, plot_id, date_range=("2026-05-01", "2026-08
 import math
 
 def build_region(lat, lon, width_m, height_m):
-    # rectangle matching the plot's actual aspect ratio, instead of forcing a square —
-    # width_m/height_m should already include whatever zoom-out padding you want
+    
     lat_offset = (height_m / 2) / 111320
     lon_offset = (width_m / 2) / (111320 * math.cos(math.radians(lat)))
     return ee.Geometry.Rectangle([lon - lon_offset, lat - lat_offset, lon + lon_offset, lat + lat_offset])
 
 
 def get_truecolor_map_url(lat, lon, width_m=750, height_m=750, date_range=("2026-05-01", "2026-08-01")):
-    # "before" image — plain true-color satellite photo of the same region, so the user
-    # can see exactly what area is being analyzed before the NDVI coloring is applied
+    
     region = build_region(lat, lon, width_m, height_m)
 
     s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
@@ -82,8 +80,7 @@ def get_truecolor_map_url(lat, lon, width_m=750, height_m=750, date_range=("2026
 
 
 def get_ndvi_map_url(lat, lon, width_m=750, height_m=750, date_range=("2026-05-01", "2026-08-01")):
-    # renders an actual color-graded NDVI image of the area around the plot
-    # (not per-grid-tile — just visual context of surrounding vegetation health)
+    
     region = build_region(lat, lon, width_m, height_m)
 
     s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
@@ -104,8 +101,8 @@ def get_ndvi_map_url(lat, lon, width_m=750, height_m=750, date_range=("2026-05-0
 
 
 if __name__ == "__main__":
-    init_ee(project="your-project-id-here")  # swap in your actual Earth Engine project ID
-    # one row per plot — NOT per grid box, resolution is ~10m so it can't map to individual tiles
+    init_ee(project="your-project-id-here")  # swap in the actual Earth Engine project ID
+    
     plots = [
         {"plot_id": "plot_1", "lat": 37.4275, "lon": -122.1697},  # swap in your actual test plot coords
     ]

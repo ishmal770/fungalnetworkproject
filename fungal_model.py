@@ -16,30 +16,20 @@ CLASSES = ["background", "none", "vegetative_stress", "fungal_fruiting_body"]
 CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
 FUNGAL_IDX = CLASS_TO_IDX["fungal_fruiting_body"]
 
-# ============================================================
-# MODEL
-# ============================================================
+
 class FungalNet(nn.Module):
     def __init__(self, num_classes=len(CLASSES), dropout_p=0.5):
         super().__init__()
         backbone = models.resnet18(weights="IMAGENET1K_V1")
 
-        # HACKATHON-SIZED DATASET FIX: freeze the *entire* backbone, including
-        # layer4. With only a few hundred images per class, fine-tuning even one
-        # conv block overfits fast — you end up memorizing backgrounds instead of
-        # learning "fungus vs not." Training only the small head below is a much
-        # smaller optimization problem and converges faster too.
+        
         for name, param in backbone.named_parameters():
             param.requires_grad = False
 
         self.features = nn.Sequential(*list(backbone.children())[:-1])  # drop original fc layer
         feat_dim = backbone.fc.in_features  # 512 for resnet18
 
-        # entire backbone is frozen now, so every BatchNorm in it should stay in
-        # eval mode — a frozen conv block still updates its running mean/var in
-        # train mode, and on a small dataset those stats drift toward the
-        # training batches, producing a train/val gap that looks like overfitting
-        # even when the weights themselves haven't moved.
+        
         self._frozen_bn = [m for name, m in self.features.named_modules()
                            if isinstance(m, nn.BatchNorm2d)]
         for m in self._frozen_bn:
@@ -47,8 +37,7 @@ class FungalNet(nn.Module):
             m.weight.requires_grad = False
             m.bias.requires_grad = False
 
-        # single shared trunk: the two heads used to each carry their own 512->64
-        # layer, which is ~66k extra parameters fitted on a few hundred images
+        
         self.trunk = nn.Sequential(
             nn.Dropout(dropout_p),
             nn.Linear(feat_dim, 64),
@@ -79,9 +68,7 @@ class FungalNet(nn.Module):
         return class_logits, network_score
 
 
-# ============================================================
-# DATASET
-# ============================================================
+
 NORMALIZE = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # standard ImageNet stats
 
 # eval/inference: deterministic, no augmentation
@@ -91,9 +78,7 @@ IMG_TRANSFORM = transforms.Compose([
     NORMALIZE,
 ])
 
-# training: every epoch sees a different crop/flip/colour of each image, so the
-# model can't memorise individual photos. This is the single biggest lever on
-# overfitting for a dataset this size.
+
 TRAIN_TRANSFORM = transforms.Compose([
     transforms.RandomResizedCrop(224, scale=(0.6, 1.0)),
     transforms.RandomHorizontalFlip(),
@@ -125,26 +110,19 @@ class FungalDataset(Dataset):
         return img, class_idx, score
 
 
-# ============================================================
-# TRAINING
-# ============================================================
+
 def train_model(train_csv="datasets/train.csv", epochs=16, batch_size=32, lr=3e-4,
                 weight_decay=5e-3, val_split=0.2, patience=6, seed=42):
-    # weight_decay bumped 1e-3 -> 5e-3: with the backbone frozen, the trunk/heads
-    # are the only thing learning, and they're small enough that stronger L2 here
-    # is cheap insurance against overfitting rather than a real capacity limiter.
+    
     torch.manual_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on {device}")
 
-    # two views of the same csv: augmented for train, clean for validation.
-    # A random_split over one dataset would augment the val set too, which makes
-    # val loss noisy and unusable as an early-stopping signal.
+    
     train_view = FungalDataset(train_csv, transform=TRAIN_TRANSFORM)
     val_view = FungalDataset(train_csv, transform=IMG_TRANSFORM)
 
-    # stratified split — a plain random_split can hand the val set a class ratio
-    # that doesn't match train, so val accuracy measures the split, not the model
+    
     from sklearn.model_selection import train_test_split
     labels = train_view.labels()
     train_idx, val_idx = train_test_split(
@@ -163,17 +141,14 @@ def train_model(train_csv="datasets/train.csv", epochs=16, batch_size=32, lr=3e-
 
     model = FungalNet().to(device)
 
-    # weight the loss by inverse class frequency so a skewed dataset doesn't get
-    # "solved" by always predicting the majority class
+    
     counts = np.bincount(labels[train_idx], minlength=len(CLASSES)).astype(float)
     weights = np.where(counts > 0, len(train_idx) / (len(present) * np.maximum(counts, 1)), 0.0)
     class_weight = torch.tensor(weights, dtype=torch.float32, device=device)
 
     class_loss_fn = nn.CrossEntropyLoss(weight=class_weight, label_smoothing=0.1)
     reg_loss_fn = nn.MSELoss()
-    # note: network_score is currently a deterministic function of `class`
-    # (see compute_network_score), so this head carries no information the
-    # classifier doesn't already have. Down-weighted until it has a real signal.
+    
     reg_weight = 0.3
 
     optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
@@ -202,7 +177,7 @@ def train_model(train_csv="datasets/train.csv", epochs=16, batch_size=32, lr=3e-
         train_losses.append(avg_train_loss)
         train_accs.append(correct / total)
 
-        # --- validate (no gradient updates — just measuring) ---
+        
         model.eval()
         total_val_loss, v_correct, v_total = 0, 0, 0
         with torch.no_grad():
@@ -221,9 +196,8 @@ def train_model(train_csv="datasets/train.csv", epochs=16, batch_size=32, lr=3e-
         print(f"Epoch {epoch+1}/{epochs} — train loss: {avg_train_loss:.4f}, val loss: {avg_val_loss:.4f}, "
               f"train acc: {train_accs[-1]:.2%}, val acc: {val_accs[-1]:.2%}")
 
-        # early stopping: keep the weights from the best val epoch, not the last
-        # one. Without this you ship whatever the model looked like after it had
-        # already started memorising.
+
+       
         if avg_val_loss < best_val - 1e-4:
             best_val, best_epoch, stale = avg_val_loss, epoch, 0
             best_state = copy.deepcopy(model.state_dict())
@@ -332,9 +306,7 @@ def report_source_confound(df, preds):
         print(f"  {src:14s} {g['correct'].mean():.2%}  (n={len(g)})")
 
 
-# ============================================================
-# INFERENCE — plugs directly into app.py's run_predict
-# ============================================================
+
 def load_model(checkpoint_path="fungal_model.pth"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = FungalNet().to(device)
@@ -384,8 +356,7 @@ def predict_image(model, image_path, grid=3, n_passes=25, min_confidence=0.65):
     device = next(model.parameters()).device
     tiles = preprocess_tiles(image_path, grid=grid).to(device)
 
-    # all tiles go through together — one batch per MC pass instead of one per
-    # tile per pass, which is the difference between ~1s and ~10s for a 4x4 plot
+    
     probs, scores = _mc_forward(model, tiles, n_passes)
     per_tile = [_summarise(probs[:, i].mean(axis=0), probs[:, i, FUNGAL_IDX],
                            scores[:, i].mean(), min_confidence)
@@ -426,9 +397,7 @@ def _mc_forward(model, batch, n_passes):
 
 def _summarise(mean_probs, fungal_samples, score_mean, min_confidence):
     top_idx = int(mean_probs.argmax())
-    # a frame the model reads as bare ground/sky, or one where no class wins
-    # clearly, is reported as "no reading" rather than scored — a rock is not a
-    # low-risk tile, it is a tile with nothing to assess
+    
     abstain = CLASSES[top_idx] == "background" or float(mean_probs[top_idx]) < min_confidence
     return {
         "mean": float(fungal_samples.mean()),   # P(fungal) — this is the risk score
